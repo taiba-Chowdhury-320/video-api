@@ -14,20 +14,8 @@ function getVideoID(url) {
 }
 
 async function searchYoutube(query) {
-  // Add "song" to avoid movies
-  const searchQuery = query + " song audio";
-
+  const searchQuery = query + " song";
   try {
-    const { data } = await axios.get(
-      `https://vid.puffyan.us/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video`,
-      { timeout: 10000 }
-    );
-    if (data && data.length > 0) {
-      return data[0].videoId;
-    }
-    throw new Error("No results");
-  } catch {
-    // Fallback YouTube scrape
     const { data: html } = await axios.get(
       `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`,
       {
@@ -41,21 +29,48 @@ async function searchYoutube(query) {
     const match = html.match(/\/watch\?v=([\w-]{11})/);
     if (!match) throw new Error("No video found for: " + query);
     return match[1];
+  } catch (err) {
+    throw new Error("Search failed: " + err.message);
   }
 }
 
 async function getMP3(videoID) {
-  const { data } = await axios.get(
-    `https://youtube-mp36.p.rapidapi.com/dl?id=${videoID}`,
-    {
-      headers: {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
+  // Try RapidAPI youtube-mp36
+  try {
+    const { data } = await axios.get(
+      `https://youtube-mp36.p.rapidapi.com/dl?id=${videoID}`,
+      {
+        headers: {
+          "x-rapidapi-key": RAPIDAPI_KEY,
+          "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
+        },
+        timeout: 25000,
+      }
+    );
+    if (data && data.link) return { title: data.title, link: data.link };
+    throw new Error("No link");
+  } catch {
+    // Fallback: cobalt API
+    const { data } = await axios.post(
+      "https://api.cobalt.tools/api/json",
+      {
+        url: `https://www.youtube.com/watch?v=${videoID}`,
+        vCodec: "h264",
+        vQuality: "720",
+        aFormat: "mp3",
+        isAudioOnly: true,
       },
-      timeout: 20000,
-    }
-  );
-  return data;
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        timeout: 20000,
+      }
+    );
+    if (data && data.url) return { title: data.filename || "audio", link: data.url };
+    throw new Error("All APIs failed");
+  }
 }
 
 module.exports = async (req, res) => {
@@ -95,7 +110,7 @@ module.exports = async (req, res) => {
       return res.status(500).json({
         success: false,
         owner: API_OWNER,
-        error: "Download link not found. Try again.",
+        error: "Download link not found.",
       });
     }
 
