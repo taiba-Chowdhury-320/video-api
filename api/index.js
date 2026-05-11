@@ -14,18 +14,33 @@ function getVideoID(url) {
 }
 
 async function searchYoutube(query) {
-  const response = await axios.get(
-    `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+  // Use RapidAPI YouTube search
+  const { data } = await axios.get(
+    `https://youtube-mp36.p.rapidapi.com/search?q=${encodeURIComponent(query)}`,
     {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
       },
-      timeout: 10000,
+      timeout: 15000,
     }
   );
-  const html = response.data;
-  const videoIDs = [...html.matchAll(/\/watch\?v=([\w-]{11})/g)].map((m) => m[1]);
-  return [...new Set(videoIDs)].slice(0, 10);
+  if (data && data.id) return data.id;
+  throw new Error("Search failed");
+}
+
+async function getMP3(videoID) {
+  const { data } = await axios.get(
+    `https://youtube-mp36.p.rapidapi.com/dl?id=${videoID}`,
+    {
+      headers: {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
+      },
+      timeout: 20000,
+    }
+  );
+  return data;
 }
 
 module.exports = async (req, res) => {
@@ -56,33 +71,43 @@ module.exports = async (req, res) => {
         });
       }
     } else {
-      const results = await searchYoutube(query);
-      if (!results.length) {
-        return res.status(404).json({
-          success: false,
-          owner: API_OWNER,
-          error: "No video found",
-        });
+      // Search via invidious (no auth needed)
+      try {
+        const { data } = await axios.get(
+          `https://vid.puffyan.us/api/v1/search?q=${encodeURIComponent(query)}&type=video`,
+          { timeout: 10000 }
+        );
+        if (data && data.length > 0) {
+          videoID = data[0].videoId;
+        } else {
+          throw new Error("No results");
+        }
+      } catch {
+        // Fallback: use youtube scrape
+        const { data: html } = await axios.get(
+          `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+          {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout: 10000,
+          }
+        );
+        const match = html.match(/\/watch\?v=([\w-]{11})/);
+        if (!match) throw new Error("No video found for: " + query);
+        videoID = match[1];
       }
-      videoID = results[0];
     }
 
-    const { data } = await axios.get(
-      `https://youtube-mp36.p.rapidapi.com/dl?id=${videoID}`,
-      {
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
-        },
-        timeout: 20000,
-      }
-    );
+    // Get MP3 download link
+    const mp3data = await getMP3(videoID);
 
-    if (!data || !data.link) {
+    if (!mp3data || !mp3data.link) {
       return res.status(500).json({
         success: false,
         owner: API_OWNER,
-        error: "Download link not found",
+        error: "Download link not found. Try again.",
       });
     }
 
@@ -90,10 +115,10 @@ module.exports = async (req, res) => {
       success: true,
       owner: API_OWNER,
       videoID,
-      title: data.title || "Unknown",
+      title: mp3data.title || "Unknown Title",
       thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
       quality: "128kbps",
-      downloadLink: data.link,
+      downloadLink: mp3data.link,
       format: "mp3",
     });
 
@@ -101,7 +126,7 @@ module.exports = async (req, res) => {
     return res.status(500).json({
       success: false,
       owner: API_OWNER,
-      error: err.message,
+      error: err.message || "Internal server error",
     });
   }
 };
