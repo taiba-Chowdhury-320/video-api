@@ -14,19 +14,34 @@ function getVideoID(url) {
 }
 
 async function searchYoutube(query) {
-  // Use RapidAPI YouTube search
-  const { data } = await axios.get(
-    `https://youtube-mp36.p.rapidapi.com/search?q=${encodeURIComponent(query)}`,
-    {
-      headers: {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
-      },
-      timeout: 15000,
+  // Add "song" to avoid movies
+  const searchQuery = query + " song audio";
+
+  try {
+    const { data } = await axios.get(
+      `https://vid.puffyan.us/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video`,
+      { timeout: 10000 }
+    );
+    if (data && data.length > 0) {
+      return data[0].videoId;
     }
-  );
-  if (data && data.id) return data.id;
-  throw new Error("Search failed");
+    throw new Error("No results");
+  } catch {
+    // Fallback YouTube scrape
+    const { data: html } = await axios.get(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        timeout: 10000,
+      }
+    );
+    const match = html.match(/\/watch\?v=([\w-]{11})/);
+    if (!match) throw new Error("No video found for: " + query);
+    return match[1];
+  }
 }
 
 async function getMP3(videoID) {
@@ -71,36 +86,9 @@ module.exports = async (req, res) => {
         });
       }
     } else {
-      // Search via invidious (no auth needed)
-      try {
-        const { data } = await axios.get(
-          `https://vid.puffyan.us/api/v1/search?q=${encodeURIComponent(query)}&type=video`,
-          { timeout: 10000 }
-        );
-        if (data && data.length > 0) {
-          videoID = data[0].videoId;
-        } else {
-          throw new Error("No results");
-        }
-      } catch {
-        // Fallback: use youtube scrape
-        const { data: html } = await axios.get(
-          `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-          {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-              "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout: 10000,
-          }
-        );
-        const match = html.match(/\/watch\?v=([\w-]{11})/);
-        if (!match) throw new Error("No video found for: " + query);
-        videoID = match[1];
-      }
+      videoID = await searchYoutube(query);
     }
 
-    // Get MP3 download link
     const mp3data = await getMP3(videoID);
 
     if (!mp3data || !mp3data.link) {
