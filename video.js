@@ -7,7 +7,6 @@ const axios = require("axios");
 const API_OWNER = "Rocky Chowdhury";
 const API_NAME = "Video API";
 
-// YouTube Video ID extractor
 function getVideoID(url) {
   const checkurl =
     /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))((\w|-){11})(?:\S+)?$/;
@@ -15,11 +14,16 @@ function getVideoID(url) {
   return match ? match[1] : null;
 }
 
-// YouTube Search
 async function searchYoutube(query) {
   try {
     const response = await axios.get(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        },
+      }
     );
     const html = response.data;
     const videoIDs = [...html.matchAll(/\/watch\?v=([\w-]{11})/g)].map(
@@ -32,7 +36,67 @@ async function searchYoutube(query) {
   }
 }
 
-// Main video download handler
+async function getDownloadLink(videoID, format = "mp4") {
+  const apis = [
+    // API 1: yt-api.p.rapidapi style (free alternative)
+    async () => {
+      const { data } = await axios.get(
+        `https://ytdl.vreden.web.id/ytdl?id=${videoID}&format=${format}`,
+        { timeout: 10000 }
+      );
+      if (data && data.url) {
+        return {
+          title: data.title || "Unknown",
+          quality: data.quality || format,
+          downloadLink: data.url,
+        };
+      }
+      throw new Error("No data");
+    },
+    // API 2: y2mate alternative
+    async () => {
+      const { data } = await axios.get(
+        `https://api.siputzx.my.id/api/d/ytmp4?url=https://www.youtube.com/watch?v=${videoID}`,
+        { timeout: 10000 }
+      );
+      if (data && data.data && data.data.dl) {
+        return {
+          title: data.data.title || "Unknown",
+          quality: "720p",
+          downloadLink: data.data.dl,
+        };
+      }
+      throw new Error("No data");
+    },
+    // API 3: another free API
+    async () => {
+      const { data } = await axios.get(
+        `https://api.nyxs.pw/dl/ytmp4?url=https://www.youtube.com/watch?v=${videoID}`,
+        { timeout: 10000 }
+      );
+      if (data && data.result && data.result.dl_url) {
+        return {
+          title: data.result.title || "Unknown",
+          quality: data.result.quality || "720p",
+          downloadLink: data.result.dl_url,
+        };
+      }
+      throw new Error("No data");
+    },
+  ];
+
+  for (const apiFn of apis) {
+    try {
+      const result = await apiFn();
+      if (result && result.downloadLink) return result;
+    } catch (e) {
+      continue;
+    }
+  }
+
+  throw new Error("All download APIs failed");
+}
+
 async function handleVideoRequest(req, res) {
   const { url, query, format = "mp4" } = req.query;
 
@@ -68,35 +132,20 @@ async function handleVideoRequest(req, res) {
           error: "No video found for: " + query,
         });
       }
-      videoID = results[Math.floor(Math.random() * results.length)];
+      videoID = results[0];
     }
 
-    // Fetch download link
-    const apiBase = "https://api.agatz.xyz/api";
-    const { data } = await axios.get(
-      `${apiBase}/ytdlp?url=https://www.youtube.com/watch?v=${videoID}&format=${format}`
-    );
-
-    if (!data || !data.data) {
-      return res.status(500).json({
-        success: false,
-        owner: API_OWNER,
-        error: "Failed to fetch download link",
-      });
-    }
-
-    const result = data.data;
+    const result = await getDownloadLink(videoID, format);
 
     return res.status(200).json({
       success: true,
       owner: API_OWNER,
       api: API_NAME,
       videoID,
-      title: result.title || "Unknown Title",
+      title: result.title,
       thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
-      duration: result.duration || "N/A",
-      quality: result.quality || format,
-      downloadLink: result.url || result.downloadLink,
+      quality: result.quality,
+      downloadLink: result.downloadLink,
       format,
     });
   } catch (err) {
