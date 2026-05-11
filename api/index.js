@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
     return res.status(200).json({
       name: "Video API",
       owner: API_OWNER,
-      status: "🟢 Online",
+      status: "Online",
       examples: {
         search: "/api/index?query=shape+of+you",
         url: "/api/index?url=https://youtu.be/JGwWNGJdvx8",
@@ -61,40 +61,84 @@ module.exports = async (req, res) => {
       videoID = await searchYoutube(query);
     }
 
-    // Get Video Download URL
-    const { data } = await axios.get(
-      `https://youtube-video-fast-downloader-24-7.p.rapidapi.com/get-video-download-url`,
-      {
-        params: {
-          videoId: videoID,
-          quality: "720",
-        },
-        headers: {
-          "x-rapidapi-key": RAPIDAPI_KEY,
-          "x-rapidapi-host": "youtube-video-fast-downloader-24-7.p.rapidapi.com",
-          "Content-Type": "application/json",
-        },
-        timeout: 25000,
+    // API 1: YouTube Video FAST Downloader
+    try {
+      const { data } = await axios.get(
+        `https://youtube-video-fast-downloader-24-7.p.rapidapi.com/get-videos-info/${videoID}`,
+        {
+          headers: {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "youtube-video-fast-downloader-24-7.p.rapidapi.com",
+          },
+          timeout: 20000,
+        }
+      );
+
+      if (data) {
+        // Find 720p or best quality
+        let downloadUrl = null;
+        let quality = "720p";
+        let title = data.title || "Unknown";
+
+        if (data.formats) {
+          const fmt = data.formats.find(f => f.qualityLabel === "720p" && f.mimeType && f.mimeType.includes("video/mp4"))
+            || data.formats.find(f => f.mimeType && f.mimeType.includes("video/mp4"))
+            || data.formats[0];
+          if (fmt) {
+            downloadUrl = fmt.url;
+            quality = fmt.qualityLabel || "720p";
+          }
+        } else if (data.url) {
+          downloadUrl = data.url;
+        } else if (data.downloadUrl) {
+          downloadUrl = data.downloadUrl;
+        }
+
+        if (downloadUrl) {
+          return res.status(200).json({
+            success: true,
+            owner: API_OWNER,
+            videoID,
+            title,
+            thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
+            quality,
+            downloadLink: downloadUrl,
+            format: "mp4",
+          });
+        }
       }
-    );
+    } catch (e) { /* try next */ }
 
-    if (!data || !data.downloadUrl) {
-      return res.status(500).json({
-        success: false,
-        owner: API_OWNER,
-        error: "Download URL not found",
-      });
-    }
+    // API 2: YouTube MP36 (MP3 fallback)
+    try {
+      const { data } = await axios.get(
+        `https://youtube-mp36.p.rapidapi.com/dl?id=${videoID}`,
+        {
+          headers: {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": "youtube-mp36.p.rapidapi.com",
+          },
+          timeout: 20000,
+        }
+      );
+      if (data && data.link) {
+        return res.status(200).json({
+          success: true,
+          owner: API_OWNER,
+          videoID,
+          title: data.title || "Unknown",
+          thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
+          quality: "128kbps",
+          downloadLink: data.link,
+          format: "mp3",
+        });
+      }
+    } catch (e) { /* failed */ }
 
-    return res.status(200).json({
-      success: true,
+    return res.status(500).json({
+      success: false,
       owner: API_OWNER,
-      videoID,
-      title: data.title || "Unknown Title",
-      thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
-      quality: data.quality || "720p",
-      downloadLink: data.downloadUrl,
-      format: "mp4",
+      error: "All APIs failed. Try again.",
     });
 
   } catch (err) {
