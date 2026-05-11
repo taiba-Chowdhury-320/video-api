@@ -14,6 +14,13 @@ function getVideoID(url) {
   return match ? match[1] : null;
 }
 
+async function getBaseApi() {
+  const { data } = await axios.get(
+    "https://raw.githubusercontent.com/Mostakim0978/D1PT0/refs/heads/main/baseApiUrl.json"
+  );
+  return data.api;
+}
+
 async function searchYoutube(query) {
   try {
     const response = await axios.get(
@@ -23,78 +30,17 @@ async function searchYoutube(query) {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         },
+        timeout: 10000,
       }
     );
     const html = response.data;
     const videoIDs = [...html.matchAll(/\/watch\?v=([\w-]{11})/g)].map(
       (m) => m[1]
     );
-    const unique = [...new Set(videoIDs)];
-    return unique.slice(0, 10);
+    return [...new Set(videoIDs)].slice(0, 10);
   } catch (err) {
     throw new Error("YouTube search failed: " + err.message);
   }
-}
-
-async function getDownloadLink(videoID, format = "mp4") {
-  const apis = [
-    // API 1: yt-api.p.rapidapi style (free alternative)
-    async () => {
-      const { data } = await axios.get(
-        `https://ytdl.vreden.web.id/ytdl?id=${videoID}&format=${format}`,
-        { timeout: 10000 }
-      );
-      if (data && data.url) {
-        return {
-          title: data.title || "Unknown",
-          quality: data.quality || format,
-          downloadLink: data.url,
-        };
-      }
-      throw new Error("No data");
-    },
-    // API 2: y2mate alternative
-    async () => {
-      const { data } = await axios.get(
-        `https://api.siputzx.my.id/api/d/ytmp4?url=https://www.youtube.com/watch?v=${videoID}`,
-        { timeout: 10000 }
-      );
-      if (data && data.data && data.data.dl) {
-        return {
-          title: data.data.title || "Unknown",
-          quality: "720p",
-          downloadLink: data.data.dl,
-        };
-      }
-      throw new Error("No data");
-    },
-    // API 3: another free API
-    async () => {
-      const { data } = await axios.get(
-        `https://api.nyxs.pw/dl/ytmp4?url=https://www.youtube.com/watch?v=${videoID}`,
-        { timeout: 10000 }
-      );
-      if (data && data.result && data.result.dl_url) {
-        return {
-          title: data.result.title || "Unknown",
-          quality: data.result.quality || "720p",
-          downloadLink: data.result.dl_url,
-        };
-      }
-      throw new Error("No data");
-    },
-  ];
-
-  for (const apiFn of apis) {
-    try {
-      const result = await apiFn();
-      if (result && result.downloadLink) return result;
-    } catch (e) {
-      continue;
-    }
-  }
-
-  throw new Error("All download APIs failed");
 }
 
 async function handleVideoRequest(req, res) {
@@ -108,6 +54,7 @@ async function handleVideoRequest(req, res) {
       error: "Please provide 'url' or 'query' parameter",
       example1: "/api/video?url=https://youtu.be/VIDEO_ID",
       example2: "/api/video?query=song+name",
+      example3: "/api/video?query=song+name&format=mp3",
     });
   }
 
@@ -135,17 +82,30 @@ async function handleVideoRequest(req, res) {
       videoID = results[0];
     }
 
-    const result = await getDownloadLink(videoID, format);
+    // Use diptoApi - same as original bot
+    const baseApi = await getBaseApi();
+    const { data } = await axios.get(
+      `${baseApi}/ytDl3?link=${videoID}&format=${format}`,
+      { timeout: 15000 }
+    );
+
+    if (!data || !data.downloadLink) {
+      return res.status(500).json({
+        success: false,
+        owner: API_OWNER,
+        error: "Download link not found",
+      });
+    }
 
     return res.status(200).json({
       success: true,
       owner: API_OWNER,
       api: API_NAME,
       videoID,
-      title: result.title,
+      title: data.title || "Unknown Title",
       thumbnail: `https://img.youtube.com/vi/${videoID}/maxresdefault.jpg`,
-      quality: result.quality,
-      downloadLink: result.downloadLink,
+      quality: data.quality || format,
+      downloadLink: data.downloadLink,
       format,
     });
   } catch (err) {
